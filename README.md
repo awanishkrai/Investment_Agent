@@ -1,49 +1,70 @@
-# InvestAgent
+# InvestAgent — AI Investment Research Pipeline
 
-built this to automate some of my investment research. you give it a company name (e.g. "Apple" or "Stripe") and it figures out the exact entity, scrapes live news and financials via Tavily, and then runs a couple LLM prompts over it to give a final Invest/Pass/Hold verdict.
+This repository contains my submission for the investment research agent assignment. It is a full-stack application that takes a company name and orchestrates a multi-step AI pipeline to generate a structured investment recommendation (Invest / Pass / Hold) based on live financial data and market sentiment.
 
-it streams the progress via SSE so the UI feels fast.
+## Architecture Overview
 
-### tech stack
-- frontend: React + Vite
-- backend: Node / Express
-- agent logic: LangGraph.js
-- llm: gpt-4o-mini
-- cache: MongoDB (caches the pipeline output for 24 hours to save API credits)
+I decided to break the research process down into a deterministic, 5-stage pipeline using **LangGraph.js**. While a single LLM call might work for simple queries, separating the concerns into discrete nodes allows for better error handling, testing, and future extensibility.
 
-### how to run it
+1. **Entity Resolution**: Cleans the user's input and resolves it to a specific company (handling ambiguities and determining public/private status).
+2. **Data Ingestion**: Fetches live news and financial data concurrently via the Tavily API.
+3. **Fundamental Analysis**: Evaluates revenue, margins, and valuation based on the scraped financial data.
+4. **Risk Analysis**: Evaluates market sentiment and flags potential risks (lawsuits, competition) from the news data.
+5. **Decision Synthesis**: Consolidates the fundamental and risk analyses into a final verdict.
 
-you'll need node 18+ and a mongo connection string.
+The backend is built with Node.js and Express, while the frontend is a React application built with Vite.
 
-1. clone the repo
-2. setup the backend:
+## Design Decisions & Trade-offs
+
+I made a few key architectural choices to balance performance, cost, and complexity for this assignment:
+
+- **Live Retrieval over Vector DB**: I opted to pass the live search results directly into the LLM context rather than implementing a RAG/Vector DB pipeline. In the financial domain, data staleness is a critical risk. This ensures the agent always reasons over today's data, though it trades off higher token usage per request.
+- **Server-Sent Events (SSE)**: The pipeline streams progress updates to the frontend via SSE. I chose SSE over WebSockets because the data flow is strictly unidirectional (server pushing updates to the client), making SSE simpler to implement and debug while still providing a real-time UX.
+- **Aggressive Caching Strategy**: LLM and search API calls are expensive. I implemented a MongoDB-backed caching layer with a 24-hour TTL index based on the normalized company name. Duplicate queries within the same day return instantly.
+- **Graceful Degradation**: Every LLM JSON output is wrapped in a parsing fallback. If an API fails or the LLM hallucinates malformed JSON, the specific node degrades gracefully (returning "insufficient data") rather than crashing the entire pipeline.
+
+## Running the Project Locally
+
+### Prerequisites
+- Node.js v18+
+- A MongoDB instance (local or Atlas)
+- API keys for OpenAI and Tavily Search
+
+### 1. Setup Environment
+Clone the repository and install dependencies for both the client and server:
+
 ```bash
-cd server
-npm install
+cd agent
+cd server && npm install
+cd ../client && npm install
+```
+
+In the `server` directory, create a `.env` file based on the example:
+```bash
 cp .env.example .env
 ```
-add your `OPENAI_API_KEY`, `TAVILY_API_KEY`, and `MONGODB_URI` to the `.env` file. (if you don't add mongo it just skips caching).
+Fill in your `OPENAI_API_KEY`, `TAVILY_API_KEY`, and `MONGODB_URI`. If you omit the MongoDB URI, the application will still function but will bypass the caching layer.
 
-3. setup frontend:
+### 2. Start the Application
+The frontend and backend run on separate development servers. Open two terminal instances:
+
 ```bash
-cd ../client
-npm install
+# Terminal 1: Start the backend API
+cd server
+npm run dev
 ```
 
-4. run both servers:
 ```bash
-# terminal 1
-cd server && npm run dev
-
-# terminal 2 
-cd client && npm run dev
+# Terminal 2: Start the React frontend
+cd client
+npm run dev
 ```
 
-then go to `http://localhost:5173`.
+Navigate to `http://localhost:5173` in your browser to test the application.
 
-### notes
-- I decided against using a vector DB / RAG setup because financial data goes stale way too fast. passing the raw search results directly into the prompt context works much better for this.
-- right now it runs the fundamental analysis and risk analysis sequentially. would be nice to run them in parallel eventually to cut the wait time in half.
-- tavily is actually pretty good at summarizing financial data without needing a heavy API like Alpha Vantage.
+## Future Improvements
 
-license is MIT, feel free to fork it.
+If I had more time to expand this project, I would focus on:
+1. **Parallel Node Execution**: The `analyzeFundamentals` and `analyzeRisk` nodes are completely independent. I would update the LangGraph configuration to fan-out and run these concurrently, which would roughly halve the pipeline's total latency.
+2. **Structured Financial APIs**: Currently, the application relies on Tavily search summaries for financial metrics. I would integrate a dedicated API (like Alpha Vantage or Polygon.io) for the fundamentals node to ensure the LLM has exact, structured numbers to reason over.
+3. **Conversational Interface**: I would transition the SSE connection to a WebSocket, allowing the user to ask follow-up questions about the generated research report while maintaining the context of the initial analysis.
